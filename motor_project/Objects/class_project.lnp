@@ -1,0 +1,4 @@
+".\Objects\STARTUP.obj",
+".\Objects\motor_control.obj" 
+TO ".\Objects\class_project" 
+PRINT(".\Listings\class_project.m51")

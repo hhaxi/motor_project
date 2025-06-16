@@ -1,0 +1,559 @@
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     1
+
+
+MACRO ASSEMBLER A51 V8.02c
+OBJECT MODULE PLACED IN .\Objects\motor_control.obj
+ASSEMBLER INVOKED BY: H:\MY SOFTWARE\Keil5 C51\C51\BIN\A51.EXE motor_control.a51 SET(SMALL) DEBUG PRINT(.\Listings\motor
+                      _control.lst) OBJECT(.\Objects\motor_control.obj) EP
+
+LOC  OBJ            LINE     SOURCE
+
+0000                   1     ORG 0000H
+0000 020100            2     LJMP MAIN
+000B                   3     ORG 000BH        ; 定时器0中断入口
+000B 0202A9            4     LJMP TIMER0_ISR
+                       5     
+                       6     ; 常量定义
+  0000                 7     MODE_STOP     EQU 0    ; 停止模式
+  0001                 8     MODE_CONSTANT EQU 1    ; 恒速模式
+  0002                 9     MODE_INCREMENT EQU 2   ; 风速递增模式
+  0003                10     MODE_NATURAL  EQU 3    ; 自然风模式
+                      11     
+                      12     ; 变量定义
+  0020                13     CURRENT_MODE DATA 20H  ; 当前模式
+  0021                14     CURRENT_GEAR DATA 21H  ; 当前档位（恒速模式用）
+  0022                15     TIMER_STATE  DATA 22H  ; 定时状态:0=未启动,1=设置中,2=运行中
+  0023                16     TIMER_COUNT  DATA 23H  ; 定时倒计时(秒)
+  0024                17     STEP_PTR     DATA 24H  ; 步进电机节拍指针
+  0025                18     RAND_SEED    DATA 25H  ; 随机数种子
+  0026                19     DISPLAY_TIMER DATA 26H ; 模式显示计时器
+  0027                20     INC_TIMER    DATA 27H  ; 递增模式计时器
+  0028                21     POWER_SAVE   DATA 28H  ; 节能标志（0:正常,1:节能）
+  0029                22     OPER_TIMER   DATA 29H  ; 操作计时器（节能用）
+                      23     
+                      24     ; 主程序
+0100                  25     ORG 0100H
+0100                  26     MAIN:
+0100 758160           27         MOV SP, #60H        ; 设置堆栈指针
+0103 752000           28         MOV CURRENT_MODE, #MODE_STOP ; 初始模式：停止
+0106 752101           29         MOV CURRENT_GEAR, #1   ; 初始档位：1
+0109 752200           30         MOV TIMER_STATE, #0    ; 初始未启动定时
+010C 752300           31         MOV TIMER_COUNT, #0    ; 定时倒计时清零
+010F 752400           32         MOV STEP_PTR, #0       ; 步进指针初始化
+0112 752511           33         MOV RAND_SEED, #17     ; 随机数种子初始化
+0115 752600           34         MOV DISPLAY_TIMER, #0  ; 模式显示计时清零
+0118 752700           35         MOV INC_TIMER, #0      ; 递增计时清零
+011B 752800           36         MOV POWER_SAVE, #0     ; 节能模式关闭
+011E 752900           37         MOV OPER_TIMER, #0     ; 操作计时清零
+                      38         
+                      39         ; 初始化定时器0（50ms定时）
+0121 758901           40         MOV TMOD, #01H      ; 定时器0模式1（16位）
+0124 758C3C           41         MOV TH0, #3CH       ; 50ms定时初值（12MHz晶振）
+0127 758AB0           42         MOV TL0, #0B0H
+012A D2AF             43         SETB EA             ; 开总中断
+012C D2A9             44         SETB ET0            ; 允许定时器0中断
+012E D28C             45         SETB TR0            ; 启动定时器0
+                      46         
+                      47         ; 初始显示停止模式
+0130 7580C0           48         MOV P0, #0C0H       ; 显示"0"
+                      49     
+0133                  50     MAIN_LOOP:
+0133 120204           51         LCALL KEY_SCAN      ; 扫描按键
+                      52         
+                      53         ; 检查定时状态
+0136 E522             54         MOV A, TIMER_STATE
+0138 B40204           55         CJNE A, #2, NOT_TIMER_RUN
+013B E523             56         MOV A, TIMER_COUNT
+013D 600D             57         JZ TIMER_ENDED      ; 定时结束
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     2
+
+                      58         
+013F                  59     NOT_TIMER_RUN:
+                      60         ; 检查当前模式是否需要关闭电机
+013F E520             61         MOV A, CURRENT_MODE
+0141 7017             62         JNZ NOT_STOP_MODE
+0143                  63     STOP_MODE:
+                      64         ; 停止模式 - 确保完全停止
+0143 75A000           65         MOV P2, #00H        ; 清除所有相位
+0146 752400           66         MOV STEP_PTR, #0    ; 重置步进指针
+0149 02018F           67         LJMP MAIN_LOOP_END
+                      68     
+014C                  69     TIMER_ENDED:
+                      70         ; 定时结束 - 停止电机
+014C 752200           71         MOV TIMER_STATE, #0    ; 重置定时状态
+014F 752000           72         MOV CURRENT_MODE, #MODE_STOP ; 进入停止模式
+0152 75A000           73         MOV P2, #00H          ; 停止电机
+0155 752400           74         MOV STEP_PTR, #0      ; 重置步进指针
+0158 8035             75         SJMP MAIN_LOOP_END
+                      76     
+015A                  77     NOT_STOP_MODE:
+                      78         ; 根据当前模式处理
+015A E520             79         MOV A, CURRENT_MODE
+015C B40103           80         CJNE A, #MODE_CONSTANT, CHECK_INCREMENT
+015F 02016B           81         LJMP CONSTANT_MODE  ; 恒速模式
+                      82         
+0162                  83     CHECK_INCREMENT:
+0162 B40203           84         CJNE A, #MODE_INCREMENT, NATURAL_MODE
+0165 020177           85         LJMP INCREMENT_MODE ; 风速递增模式
+                      86         
+0168                  87     NATURAL_MODE:
+0168 020183           88         LJMP NATURAL_MODE_HANDLE ; 自然风模式
+                      89     
+016B                  90     CONSTANT_MODE:
+                      91         ; 恒速模式 - 根据档位驱动
+016B 1202F4           92         LCALL SET_DELAY
+016E 1201F1           93         LCALL STEP_MOTOR
+0171 120319           94         LCALL DELAY
+0174 02018F           95         LJMP MAIN_LOOP_END
+                      96     
+0177                  97     INCREMENT_MODE:
+                      98         ; 风速递增模式 - 自动循环
+0177 1201F1           99         LCALL STEP_MOTOR
+017A 1202F4          100         LCALL SET_DELAY
+017D 120319          101         LCALL DELAY
+0180 02018F          102         LJMP MAIN_LOOP_END
+                     103     
+0183                 104     NATURAL_MODE_HANDLE:
+                     105         ; 自然风模式 - 随机延时
+0183 12030B          106         LCALL GEN_RANDOM
+0186 1201F1          107         LCALL STEP_MOTOR
+0189 120319          108         LCALL DELAY
+018C 02018F          109         LJMP MAIN_LOOP_END
+                     110     
+018F                 111     MAIN_LOOP_END:
+                     112         ; 更新数码管显示
+018F E522            113         MOV A, TIMER_STATE
+0191 7028            114         JNZ SHOW_TIMER_DISP ; 在定时状态时显示定时相关
+                     115         
+                     116         ; 非定时状态 - 显示模式内容
+0193 E526            117         MOV A, DISPLAY_TIMER
+0195 701A            118         JNZ SHOW_MODE_CHAR  ; 如果显示计时未结束，显示模式字符
+                     119         
+                     120         ; 显示计时结束，显示内容
+0197 E520            121         MOV A, CURRENT_MODE
+0199 B4010B          122         CJNE A, #MODE_CONSTANT, SHOW_DEFAULT
+                     123         ; 恒速模式显示档位
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     3
+
+019C 900337          124         MOV DPTR, #DIGIT_TABLE
+019F E521            125         MOV A, CURRENT_GEAR
+01A1 14              126         DEC A               ; 档位1显示'1'
+01A2 93              127         MOVC A, @A+DPTR
+01A3 F580            128         MOV P0, A
+01A5 8032            129         SJMP DISPLAY_DONE
+                     130         
+01A7                 131     SHOW_DEFAULT:
+                     132         ; 其他模式显示相应字符
+01A7 900333          133         MOV DPTR, #MODE_TABLE
+01AA E520            134         MOV A, CURRENT_MODE
+01AC 93              135         MOVC A, @A+DPTR
+01AD F580            136         MOV P0, A
+01AF 8028            137         SJMP DISPLAY_DONE
+                     138     
+01B1                 139     SHOW_MODE_CHAR:
+                     140         ; 显示模式字符
+01B1 900333          141         MOV DPTR, #MODE_TABLE
+01B4 E520            142         MOV A, CURRENT_MODE
+01B6 93              143         MOVC A, @A+DPTR
+01B7 F580            144         MOV P0, A
+01B9 801E            145         SJMP DISPLAY_DONE
+                     146     
+01BB                 147     SHOW_TIMER_DISP:
+                     148         ; 定时状态 - 显示定时信息
+01BB E522            149         MOV A, TIMER_STATE
+01BD B4010A          150         CJNE A, #1, SHOW_COUNTDOWN
+                     151         
+                     152         ; 定时设置状态 - 显示设置值
+01C0 E523            153         MOV A, TIMER_COUNT
+01C2 900337          154         MOV DPTR, #DIGIT_TABLE
+01C5 93              155         MOVC A, @A+DPTR
+01C6 F580            156         MOV P0, A
+01C8 800F            157         SJMP DISPLAY_DONE
+                     158     
+01CA                 159     SHOW_COUNTDOWN:
+                     160         ; 定时运行状态 - 显示倒计时
+01CA E523            161         MOV A, TIMER_COUNT
+01CC 6008            162         JZ SHOW_TIMER_END
+01CE 900337          163         MOV DPTR, #DIGIT_TABLE
+01D1 93              164         MOVC A, @A+DPTR
+01D2 F580            165         MOV P0, A
+01D4 8003            166         SJMP DISPLAY_DONE
+                     167         
+01D6                 168     SHOW_TIMER_END:
+                     169         ; 定时结束状态 - 显示"0"
+01D6 7580C0          170         MOV P0, #0C0H
+                     171     
+01D9                 172     DISPLAY_DONE:
+                     173         ; 节能模式处理（放在主循环最后）
+01D9 E528            174         MOV A, POWER_SAVE
+01DB 6011            175         JZ MAIN_LOOP_RESTART ; 非节能模式继续
+                     176         
+01DD E529            177         MOV A, OPER_TIMER
+01DF B4C80C          178         CJNE A, #200, MAIN_LOOP_RESTART ; 200 * 50ms=10秒
+                     179         
+                     180         ; 节能模式下10秒无操作，关闭电机
+01E2 75A000          181         MOV P2, #00H
+01E5 752400          182         MOV STEP_PTR, #0
+01E8 752000          183         MOV CURRENT_MODE, #MODE_STOP
+01EB 752800          184         MOV POWER_SAVE, #0 ; 可选：关闭节能模式
+                     185         
+01EE                 186     MAIN_LOOP_RESTART:
+01EE 020133          187         LJMP MAIN_LOOP
+                     188     
+                     189     ; 步进电机驱动子程序
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     4
+
+01F1                 190     STEP_MOTOR:
+01F1 90032F          191         MOV DPTR, #STEP_TABLE
+01F4 E524            192         MOV A, STEP_PTR
+01F6 93              193         MOVC A, @A+DPTR     ; 获取当前节拍
+01F7 F5A0            194         MOV P2, A           ; 输出到电机
+01F9 0524            195         INC STEP_PTR        ; 指向下一节拍
+01FB E524            196         MOV A, STEP_PTR
+01FD B40403          197         CJNE A, #4, STEP_END
+0200 752400          198         MOV STEP_PTR, #0    ; 循环节拍
+0203                 199     STEP_END:
+0203 22              200         RET
+                     201     
+                     202     ; 按键扫描子程序
+0204                 203     KEY_SCAN:
+                     204         ; KEY1 - 模式切换 (P1.0)
+0204 20901D          205         JB P1.0, KEY2
+0207 120326          206         LCALL DELAY_20MS    ; 消抖
+020A 209017          207         JB P1.0, KEY2
+020D 3090FD          208         JNB P1.0, $         ; 等待释放
+                     209         ; 切换模式
+0210 752900          210         MOV OPER_TIMER, #0  ; 重置操作计时
+0213 752200          211         MOV TIMER_STATE, #0 ; 取消任何定时操作
+0216 0520            212         INC CURRENT_MODE    ; 模式+1
+0218 E520            213         MOV A, CURRENT_MODE
+021A B40403          214         CJNE A, #4, MODE_SWITCH_DONE ; 0-3模式
+021D 752000          215         MOV CURRENT_MODE, #0 ; 循环
+0220                 216     MODE_SWITCH_DONE:
+0220 752628          217         MOV DISPLAY_TIMER, #40 ; 2秒模式显示
+0223 22              218         RET
+                     219     
+0224                 220     KEY2:
+                     221         ; KEY2 - 增加档位/定时设置 (P1.1)
+0224 20912B          222         JB P1.1, KEY3
+0227 120326          223         LCALL DELAY_20MS
+022A 209125          224         JB P1.1, KEY3
+022D 3091FD          225         JNB P1.1, $
+0230 752900          226         MOV OPER_TIMER, #0  ; 重置操作计时
+                     227         
+0233 E522            228         MOV A, TIMER_STATE
+0235 7010            229         JNZ KEY2_TIMER_MODE ; 定时状态下处理定时设置
+                     230         
+                     231         ; 正常模式 - 仅在恒速模式下增加档位
+0237 E520            232         MOV A, CURRENT_MODE
+0239 B4010A          233         CJNE A, #MODE_CONSTANT, KEY2_END
+                     234         ; 恒速模式 - 增加档位
+023C 0521            235         INC CURRENT_GEAR
+023E E521            236         MOV A, CURRENT_GEAR
+0240 B40403          237         CJNE A, #4, KEY2_END ; 1-3档
+0243 752101          238         MOV CURRENT_GEAR, #1 ; 循环
+0246                 239     KEY2_END:
+0246 22              240         RET
+                     241     
+0247                 242     KEY2_TIMER_MODE:
+                     243         ; 定时设置状态下增加定时时间
+0247 E523            244         MOV A, TIMER_COUNT
+0249 04              245         INC A
+024A B40A02          246         CJNE A, #10, SET_TIMER_VAL ; 1-9秒
+024D 7400            247         MOV A, #0           ; 到9后回到0
+024F                 248     SET_TIMER_VAL:
+024F F523            249         MOV TIMER_COUNT, A
+0251 22              250         RET
+                     251     
+0252                 252     KEY3:
+                     253         ; KEY3 - 定时功能 (P1.2)
+0252 209217          254         JB P1.2, KEY4
+0255 120326          255         LCALL DELAY_20MS
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     5
+
+0258 209211          256         JB P1.2, KEY4
+025B 3092FD          257         JNB P1.2, $
+025E 752900          258         MOV OPER_TIMER, #0  ; 重置操作计时
+                     259         
+                     260         ; 仅在非停止模式有效
+0261 E520            261         MOV A, CURRENT_MODE
+0263 6007            262         JZ KEY4             ; 停止模式无效
+                     263         
+                     264         ; 进入定时设置状态
+0265 752201          265         MOV TIMER_STATE, #1 ; 设置状态
+0268 752300          266         MOV TIMER_COUNT, #0 ; 初始化定时值
+026B 22              267         RET
+                     268     
+026C                 269     KEY4:
+                     270         ; KEY4 - 启动定时 (P1.3)
+026C 20931C          271         JB P1.3, KEY5
+026F 120326          272         LCALL DELAY_20MS
+0272 209316          273         JB P1.3, KEY5
+0275 3093FD          274         JNB P1.3, $
+0278 752900          275         MOV OPER_TIMER, #0  ; 重置操作计时
+                     276         
+                     277         ; 仅在定时设置状态有效
+027B E522            278         MOV A, TIMER_STATE
+027D B4010B          279         CJNE A, #1, KEY5    ; 非设置状态无效
+                     280         
+                     281         ; 检查设置值是否有效 (1-9秒)
+0280 E523            282         MOV A, TIMER_COUNT
+0282 6007            283         JZ KEY5             ; 0秒无效
+                     284         
+                     285         ; 启动定时
+0284 752202          286         MOV TIMER_STATE, #2 ; 运行状态
+0287 752700          287         MOV INC_TIMER, #0   ; 清零定时计数
+028A 22              288         RET
+                     289     
+028B                 290     KEY5:
+                     291         ; KEY5 - 节能开关 (P1.4)
+028B 20941A          292         JB P1.4, KEY_END
+028E 120326          293         LCALL DELAY_20MS
+0291 209414          294         JB P1.4, KEY_END
+0294 3094FD          295         JNB P1.4, $
+0297 752900          296         MOV OPER_TIMER, #0  ; 重置操作计时
+                     297         
+                     298         ; 切换节能模式
+029A E528            299         MOV A, POWER_SAVE
+029C F4              300         CPL A
+029D F528            301         MOV POWER_SAVE, A
+029F 6007            302         JZ KEY_END          ; 关闭节能模式
+                     303         
+                     304         ; 开启节能模式 - 显示"E"2秒
+02A1 758086          305         MOV P0, #86H        ; 显示"E"
+02A4 752628          306         MOV DISPLAY_TIMER, #40 ; 2秒显示
+02A7 22              307         RET
+                     308     
+02A8                 309     KEY_END:
+02A8 22              310         RET
+                     311     
+                     312     ; 定时器0中断服务程序
+02A9                 313     TIMER0_ISR:
+02A9 C28C            314         CLR TR0
+02AB 758C3C          315         MOV TH0, #3CH       ; 重装50ms初值
+02AE 758AB0          316         MOV TL0, #0B0H
+02B1 D28C            317         SETB TR0
+                     318         
+                     319         ; 模式显示计时
+02B3 E526            320         MOV A, DISPLAY_TIMER
+02B5 6002            321         JZ CHECK_TIMER
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     6
+
+02B7 1526            322         DEC DISPLAY_TIMER
+                     323         
+02B9                 324     CHECK_TIMER:
+                     325         ; 定时倒计时处理
+02B9 E522            326         MOV A, TIMER_STATE
+02BB B40211          327         CJNE A, #2, CHECK_INCREMENT_MODE ; 非运行状态跳过
+                     328         
+                     329         ; 每秒减少定时时间
+02BE 0527            330         INC INC_TIMER
+02C0 E527            331         MOV A, INC_TIMER
+02C2 B4140A          332         CJNE A, #20, CHECK_INCREMENT_MODE ; 20 * 50ms=1秒
+02C5 752700          333         MOV INC_TIMER, #0
+02C8 1523            334         DEC TIMER_COUNT     ; 倒计时减1
+02CA E523            335         MOV A, TIMER_COUNT
+02CC 7001            336         JNZ CHECK_INCREMENT_MODE
+                     337         ; 定时结束 - 跳回主循环处理
+02CE 32              338         RETI
+                     339     
+02CF                 340     CHECK_INCREMENT_MODE:
+                     341         ; 风速递增模式计时
+02CF E520            342         MOV A, CURRENT_MODE
+02D1 B40214          343         CJNE A, #MODE_INCREMENT, CHECK_OPER_TIME
+                     344         ; 每2秒切换档位
+02D4 0527            345         INC INC_TIMER
+02D6 E527            346         MOV A, INC_TIMER
+02D8 B4280D          347         CJNE A, #40, CHECK_OPER_TIME ; 40 * 50ms=2秒
+02DB 752700          348         MOV INC_TIMER, #0
+                     349         ; 切换档位
+02DE 0521            350         INC CURRENT_GEAR
+02E0 E521            351         MOV A, CURRENT_GEAR
+02E2 B40403          352         CJNE A, #4, CHECK_OPER_TIME
+02E5 752101          353         MOV CURRENT_GEAR, #1 ; 1-3档循环
+                     354     
+02E8                 355     CHECK_OPER_TIME:
+                     356         ; 操作计时（节能用）
+02E8 E529            357         MOV A, OPER_TIMER
+02EA B4C804          358         CJNE A, #200, NOT_OP_TIMEOUT
+02ED 7529C7          359         MOV OPER_TIMER, #199  ; 重置为199（避免溢出）
+02F0 32              360         RETI
+                     361         
+02F1                 362     NOT_OP_TIMEOUT:
+02F1 0529            363         INC OPER_TIMER
+02F3 32              364         RETI
+                     365     
+                     366     ; 设置延时参数
+02F4                 367     SET_DELAY:
+02F4 E521            368         MOV A, CURRENT_GEAR
+                     369         ; 根据档位设置延时
+02F6 B40105          370         CJNE A, #1, DELAY_GEAR2
+02F9 7E1E            371         MOV R6, #30         ; 1档延时参数
+02FB 7FC8            372         MOV R7, #200
+02FD 22              373         RET
+02FE                 374     DELAY_GEAR2:
+02FE B40205          375         CJNE A, #2, DELAY_GEAR3
+0301 7E14            376         MOV R6, #20         ; 2档延时参数
+0303 7F96            377         MOV R7, #150
+0305 22              378         RET
+0306                 379     DELAY_GEAR3:
+0306 7E0A            380         MOV R6, #10         ; 3档延时参数
+0308 7F64            381         MOV R7, #100
+030A 22              382         RET
+                     383     
+                     384     ; 随机数生成（用于自然风模式）
+030B                 385     GEN_RANDOM:
+030B E525            386         MOV A, RAND_SEED
+030D 2411            387         ADD A, #17          ; 伪随机算法
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     7
+
+030F F525            388         MOV RAND_SEED, A
+0311 540F            389         ANL A, #0FH         ; 取低4位（0-15）
+0313 2405            390         ADD A, #5           ; 偏移量（5-20）
+0315 FE              391         MOV R6, A           ; 作为延时参数
+0316 7F96            392         MOV R7, #150
+0318 22              393         RET
+                     394     
+                     395     ; 延时子程序（参数在R6,R7）
+0319                 396     DELAY:
+0319 7D0A            397         MOV R5, #10
+031B                 398     DELAY_LOOP:
+031B EE              399         MOV A, R6
+031C FB              400         MOV R3, A
+031D                 401     DELAY_INNER:
+031D EF              402         MOV A, R7
+031E FC              403         MOV R4, A
+031F                 404     DELAY_INNER2:
+031F DCFE            405         DJNZ R4, DELAY_INNER2
+0321 DBFA            406         DJNZ R3, DELAY_INNER
+0323 DDF6            407         DJNZ R5, DELAY_LOOP
+0325 22              408         RET
+                     409     
+                     410     ; 20ms消抖延时
+0326                 411     DELAY_20MS:
+0326 7F28            412         MOV R7, #40
+0328                 413     DL1:
+0328 7EFA            414         MOV R6, #250
+032A                 415     DL2:
+032A DEFE            416         DJNZ R6, DL2
+032C DFFA            417         DJNZ R7, DL1
+032E 22              418         RET
+                     419     
+                     420     ; 步进电机节拍表（双相四拍）
+032F                 421     STEP_TABLE:
+032F 05              422         DB 05H   ; A+B+ (0000 0101)
+0330 09              423         DB 09H   ; A+B- (0000 1001)
+0331 0A              424         DB 0AH   ; A-B- (0000 1010)
+0332 06              425         DB 06H   ; A-B+ (0000 0110)
+                     426     
+                     427     ; 模式显示表（共阳极）
+0333                 428     MODE_TABLE:
+0333 C0              429         DB 0C0H  ; 0: 停止模式 (实际显示0,但在主循环中处理)
+0334 88              430         DB 88H   ; 1: 恒速模式 "A"
+0335 83              431         DB 83H   ; 2: 风速递增模式 "B"
+0336 C6              432         DB 0C6H  ; 3: 自然风模式 "C"
+                     433     
+                     434     ; 数字显示表（共阳极）
+0337                 435     DIGIT_TABLE:
+0337 C0              436         DB 0C0H  ; 0
+0338 F9              437         DB 0F9H  ; 1
+0339 A4              438         DB 0A4H  ; 2
+033A B0              439         DB 0B0H  ; 3
+033B 99              440         DB 99H   ; 4
+033C 92              441         DB 92H   ; 5
+033D 82              442         DB 82H   ; 6
+033E F8              443         DB 0F8H  ; 7
+033F 80              444         DB 80H   ; 8
+0340 90              445         DB 90H   ; 9
+                     446     
+                     447     END
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     8
+
+SYMBOL TABLE LISTING
+------ ----- -------
+
+
+N A M E               T Y P E  V A L U E   ATTRIBUTES
+
+CHECK_INCREMENT. . .  C ADDR   0162H   A   
+CHECK_INCREMENT_MODE  C ADDR   02CFH   A   
+CHECK_OPER_TIME. . .  C ADDR   02E8H   A   
+CHECK_TIMER. . . . .  C ADDR   02B9H   A   
+CONSTANT_MODE. . . .  C ADDR   016BH   A   
+CURRENT_GEAR . . . .  D ADDR   0021H   A   
+CURRENT_MODE . . . .  D ADDR   0020H   A   
+DELAY. . . . . . . .  C ADDR   0319H   A   
+DELAY_20MS . . . . .  C ADDR   0326H   A   
+DELAY_GEAR2. . . . .  C ADDR   02FEH   A   
+DELAY_GEAR3. . . . .  C ADDR   0306H   A   
+DELAY_INNER. . . . .  C ADDR   031DH   A   
+DELAY_INNER2 . . . .  C ADDR   031FH   A   
+DELAY_LOOP . . . . .  C ADDR   031BH   A   
+DIGIT_TABLE. . . . .  C ADDR   0337H   A   
+DISPLAY_DONE . . . .  C ADDR   01D9H   A   
+DISPLAY_TIMER. . . .  D ADDR   0026H   A   
+DL1. . . . . . . . .  C ADDR   0328H   A   
+DL2. . . . . . . . .  C ADDR   032AH   A   
+EA . . . . . . . . .  B ADDR   00A8H.7 A   
+ET0. . . . . . . . .  B ADDR   00A8H.1 A   
+GEN_RANDOM . . . . .  C ADDR   030BH   A   
+INCREMENT_MODE . . .  C ADDR   0177H   A   
+INC_TIMER. . . . . .  D ADDR   0027H   A   
+KEY2 . . . . . . . .  C ADDR   0224H   A   
+KEY2_END . . . . . .  C ADDR   0246H   A   
+KEY2_TIMER_MODE. . .  C ADDR   0247H   A   
+KEY3 . . . . . . . .  C ADDR   0252H   A   
+KEY4 . . . . . . . .  C ADDR   026CH   A   
+KEY5 . . . . . . . .  C ADDR   028BH   A   
+KEY_END. . . . . . .  C ADDR   02A8H   A   
+KEY_SCAN . . . . . .  C ADDR   0204H   A   
+MAIN . . . . . . . .  C ADDR   0100H   A   
+MAIN_LOOP. . . . . .  C ADDR   0133H   A   
+MAIN_LOOP_END. . . .  C ADDR   018FH   A   
+MAIN_LOOP_RESTART. .  C ADDR   01EEH   A   
+MODE_CONSTANT. . . .  N NUMB   0001H   A   
+MODE_INCREMENT . . .  N NUMB   0002H   A   
+MODE_NATURAL . . . .  N NUMB   0003H   A   
+MODE_STOP. . . . . .  N NUMB   0000H   A   
+MODE_SWITCH_DONE . .  C ADDR   0220H   A   
+MODE_TABLE . . . . .  C ADDR   0333H   A   
+NATURAL_MODE . . . .  C ADDR   0168H   A   
+NATURAL_MODE_HANDLE.  C ADDR   0183H   A   
+NOT_OP_TIMEOUT . . .  C ADDR   02F1H   A   
+NOT_STOP_MODE. . . .  C ADDR   015AH   A   
+NOT_TIMER_RUN. . . .  C ADDR   013FH   A   
+OPER_TIMER . . . . .  D ADDR   0029H   A   
+P0 . . . . . . . . .  D ADDR   0080H   A   
+P1 . . . . . . . . .  D ADDR   0090H   A   
+P2 . . . . . . . . .  D ADDR   00A0H   A   
+POWER_SAVE . . . . .  D ADDR   0028H   A   
+RAND_SEED. . . . . .  D ADDR   0025H   A   
+SET_DELAY. . . . . .  C ADDR   02F4H   A   
+SET_TIMER_VAL. . . .  C ADDR   024FH   A   
+SHOW_COUNTDOWN . . .  C ADDR   01CAH   A   
+SHOW_DEFAULT . . . .  C ADDR   01A7H   A   
+SHOW_MODE_CHAR . . .  C ADDR   01B1H   A   
+SHOW_TIMER_DISP. . .  C ADDR   01BBH   A   
+SHOW_TIMER_END . . .  C ADDR   01D6H   A   
+A51 MACRO ASSEMBLER  MOTOR_CONTROL                                                        06/16/2025 19:58:00 PAGE     9
+
+SP . . . . . . . . .  D ADDR   0081H   A   
+STEP_END . . . . . .  C ADDR   0203H   A   
+STEP_MOTOR . . . . .  C ADDR   01F1H   A   
+STEP_PTR . . . . . .  D ADDR   0024H   A   
+STEP_TABLE . . . . .  C ADDR   032FH   A   
+STOP_MODE. . . . . .  C ADDR   0143H   A   
+TH0. . . . . . . . .  D ADDR   008CH   A   
+TIMER0_ISR . . . . .  C ADDR   02A9H   A   
+TIMER_COUNT. . . . .  D ADDR   0023H   A   
+TIMER_ENDED. . . . .  C ADDR   014CH   A   
+TIMER_STATE. . . . .  D ADDR   0022H   A   
+TL0. . . . . . . . .  D ADDR   008AH   A   
+TMOD . . . . . . . .  D ADDR   0089H   A   
+TR0. . . . . . . . .  B ADDR   0088H.4 A   
+
+
+REGISTER BANK(S) USED: 0 
+
+
+ASSEMBLY COMPLETE.  0 WARNING(S), 0 ERROR(S)
